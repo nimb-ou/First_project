@@ -1,14 +1,18 @@
 # Two projects, built to be questioned
 
+**→ [nimb-ou.github.io](https://nimb-ou.github.io)** — the interactive writeup. Public, works
+anywhere, no login.
+
 Both repos exist to back specific claims on a CV. The design goal throughout was not to
 produce impressive numbers — it was to produce numbers that survive being asked about.
 
 | | [loan-underwriting-copilot](https://github.com/nimb-ou/loan-underwriting-copilot) | [power-price-alpha](https://github.com/nimb-ou/power-price-alpha) |
 |---|---|---|
-| **What** | Credit scoring + SHAP + RAG over precedents + a grounded LLM agent | GB half-hourly price forecasting + battery-arbitrage backtest |
+| **What** | Credit scoring + SHAP + reason codes + RAG over precedents + a grounded LLM agent | GB half-hourly price forecasting + conformal intervals + battery-arbitrage backtest |
 | **Stack** | XGBoost, ChromaDB, Gemini 2.5 Flash, SHAP, FastAPI, Docker | XGBoost, statsmodels, pandas, three public APIs |
-| **Tests** | 105 | 85 |
-| **Course** | 9 notebooks + 7 markdown lessons | 13 notebooks + 2 markdown lessons |
+| **Tests** | 226 (5 skip without an LLM key) | 201 |
+| **Course** | 10 notebooks + 5 markdown lessons + solutions | 14 notebooks + 2 markdown lessons + solutions |
+| **Writeup** | [nimb-ou.github.io/credit.html](https://nimb-ou.github.io/credit.html) | [nimb-ou.github.io/power.html](https://nimb-ou.github.io/power.html) |
 | **One command** | `make all` | `make all` |
 
 ## What each one measured
@@ -84,3 +88,47 @@ then reject inference.
 
 **Power:** charge battery degradation per cycle, relax the one-cycle-a-day constraint, and
 replace the point forecast with a bid curve.
+
+
+---
+
+## Added since the first pass
+
+**Credit — fairness, measured rather than assumed.** The system already hid protected
+attributes from the officer view and blocked the agent from citing one as a reason. Neither is
+a fairness result. `models/fairness.py` now measures per-group approval rates, bad rates and
+AUC at the served threshold, and tests them by permutation.
+
+The first version used a bootstrap on the min/max approval-rate ratio and reported all three
+protected attributes as conclusively disparate. That was the *test* being wrong: `min` over a
+set of noisy group rates is biased downward, and a bootstrap centred on a biased estimate
+stays biased. After the fix: one attribute untestable (8 people), one gap explained by
+realised default rates, and **one real finding** — the age gap survives restricting to
+applicants who did not default. The ablation prices the fix at 0.008 AUC, inside the
+confidence interval, and the disparity does not survive the removal.
+
+**Credit — adverse-action reason codes.** A SHAP table is not the notice a declined applicant
+is owed. `explain/reason_codes.py` produces the regulated artifact: risk-increasing factors
+only, capped at four, each quoting the applicant's own value, never a protected attribute.
+Served on `/explain` and shown beside the SHAP table in the UI, because confusing the two
+means mailing someone log-odds.
+
+**Power — the interval that did not mean what it said.** Quantile forecasts fitted under
+pinball loss cover **50.2%** of outturns against a nominal 80%. That is not a broken
+estimator: on the window it was fitted on, coverage is 0.810, and across the same split the
+standard deviation of prices rose from 14.8 to 21.3 GBP/MWh. The market moved.
+
+Conformal calibration takes coverage to **75.6%** and — the number that matters — Winkler from
+208.1 to 169.5. It does not reach nominal, because exchangeability fails on a non-stationary
+series, and that shortfall is reported rather than hidden.
+
+**Power — forecast results by regime.** Answers the obvious challenge. The improvement is
+**16.0%** calm, **27.6%** crisis, **36.6%** post-crisis — largest in the most recent regime,
+so it is not an artifact of the gas crisis.
+
+**Both — the course became usable alone.** A syllabus with prerequisites and reading order,
+and worked solutions for every exercise. Where an exercise is cheap to run, the solution
+carries a measured number: the single-rule credit policy costs 0.912 per applicant against
+0.700 for declining everyone, and reconstructing `foreign_worker` from the other attributes
+scores 96.0% against a 96.3% majority-class baseline — worse than a constant, which is the
+trap the exercise is built around.

@@ -1,17 +1,66 @@
-# Runbook — how to run and use both projects
+# Runbook — how to run and use everything
 
-Two repos, both on GitHub (private), both fully working on this Mac.
+## The link
 
-| Project | GitHub | Local |
+**https://nimb-ou.github.io** — the portfolio site. Public, works on any device, no login.
+Send this to anyone.
+
+| | GitHub | Local |
 |---|---|---|
+| Portfolio site | [nimb-ou/nimb-ou.github.io](https://github.com/nimb-ou/nimb-ou.github.io) | `~/Desktop/First_project/portfolio-site` |
 | Loan Underwriting Copilot | [nimb-ou/loan-underwriting-copilot](https://github.com/nimb-ou/loan-underwriting-copilot) | `~/Desktop/First_project/loan-underwriting-copilot` |
 | Power Price Alpha | [nimb-ou/power-price-alpha](https://github.com/nimb-ou/power-price-alpha) | `~/Desktop/First_project/power-price-alpha` |
 
-Both are **private**. To share either one:
+All three are **public**. To reverse that:
 
 ```bash
-gh repo edit nimb-ou/loan-underwriting-copilot --visibility public --accept-visibility-change-consequences
+gh repo edit nimb-ou/loan-underwriting-copilot --visibility private --accept-visibility-change-consequences
 ```
+
+---
+
+# Part 0 — The website
+
+Four pages: a landing page, one per project, and the course index. Static HTML with
+hand-rolled SVG charts — no build step, no dependencies, nothing that can break because a CDN
+went down.
+
+**The interactive parts run on real exported output**, not on a model in the browser:
+
+- **Credit** — a threshold slider that recomputes the confusion matrix and expected cost live
+  from the 250 held-out applicants' real probabilities; a browser over all 250 with their
+  actual SHAP values, reason codes and retrieved precedents; the fairness result with its
+  ablation.
+- **Power** — 27 labelled sample days at full half-hourly resolution with the forecast, the
+  naive baseline and both interval versions; MAE by settlement period; the regime table; the
+  cumulative P&L curve.
+
+## Regenerating the site data
+
+Every number on the site comes from the projects. After retraining either one:
+
+```bash
+cd ~/Desktop/First_project/loan-underwriting-copilot
+.venv/bin/python tools/export_site_data.py --out ../portfolio-site/data/credit.json
+
+cd ~/Desktop/First_project/power-price-alpha
+.venv/bin/python tools/export_site_data.py --out ../portfolio-site/data/power.json
+
+cd ~/Desktop/First_project/portfolio-site
+git add -A && git commit -m "Refresh exported data" && git push
+```
+
+GitHub Pages redeploys in under a minute. Never edit the JSON by hand — that is the one way
+the site can start disagreeing with the models.
+
+## Previewing locally
+
+```bash
+cd ~/Desktop/First_project/portfolio-site && python3 -m http.server 4321
+```
+
+Then open `http://localhost:4321`. Opening the files with `file://` will not work: browsers
+block `fetch` for local files so the data never loads. The page detects that and says so.
 
 ---
 
@@ -95,7 +144,7 @@ Four endpoints, layered by how much you should trust them:
 |---|---|---|
 | `GET /health` | is everything loaded | no |
 | `POST /score` | probability + cost-based decision | **no** |
-| `POST /explain` | the above + SHAP factors | **no** |
+| `POST /explain` | the above + SHAP factors + adverse-action reason codes | **no** |
 | `POST /ask` | the above + a narrated, guarded answer | yes |
 
 That layering is the architectural argument: a caller who wants a decision never depends on an
@@ -131,11 +180,12 @@ image is deterministic and a model version isn't welded to a code version.
 ## Working through the course
 
 ```bash
-open course/00-architecture-and-setup.md          # start here
-jupyter notebook notebooks/                       # then lessons 01-09
+open course/README.md                             # the syllabus — start here
+jupyter notebook notebooks/                       # then the lessons in order
 ```
 
-Order: `course/00` → notebooks `01`–`09` → `course/10`, `12`, `14`, `16`.
+15 lessons. `course/README.md` has the reading order, prerequisites and a "if you only read
+four" list. Every lesson has exercises and `course/solutions.md` answers all of them.
 
 Lessons live as `.py` files under `notebooks/_src/` and are generated into `.ipynb`. If you
 edit a lesson, run `make notebooks`. A test enforces that they stay in sync.
@@ -143,11 +193,34 @@ edit a lesson, run `make notebooks`. A test enforces that they stay in sync.
 ## Everything else
 
 ```bash
-make test            # 127 tests
+make test            # 226 tests (5 skip without an LLM key)
 make lint            # ruff + mypy
 make card            # regenerate reports/model_card.md
-make notebooks-check # execute every lesson end to end (~10 min)
+make fairness        # group fairness + the protected-attribute ablation
+make notebooks-check # execute every lesson end to end (~12 min)
 ```
+
+## The fairness result
+
+```bash
+make fairness
+```
+
+Three outcomes, and they are different from each other:
+
+- `foreign_worker` — **not testable**. The minority group has 8 members.
+- `personal_status_sex` — a gap exists (p=0.038) and **disappears** among applicants who did
+  not default (p=0.103), so differing realised risk explains it.
+- `age_years` — a gap exists (p=0.027) and **survives** that restriction (p=0.039). This is
+  the finding.
+
+The ablation then prices the fix: removing all three protected attributes costs 0.008 AUC —
+inside the AUC confidence interval — and the age disparity does not survive the removal.
+
+If someone asks "did you check for bias?", this is the answer, and the interesting part is
+that the first version of the test reported all three as conclusive. That was the test being
+wrong: a bootstrap around a minimum-over-groups is biased downward. The permutation test that
+replaced it is in `models/fairness.py` with the reasoning.
 
 ---
 
@@ -207,8 +280,19 @@ jq '.strategy.uplift_vs_naive_pct, .strategy.share_of_oracle' reports/metrics.js
 | MAE improvement vs declared baseline | 29.9% |
 | vs **strongest** baseline | **22.2%** |
 | with **all weather removed** | **22.1%** |
+| By regime | 16.0% calm / 27.6% crisis / 36.6% post-crisis |
+| P10-P90 coverage, raw → conformalised | 50.2% → **75.6%** (nominal 80%) |
+| Winkler score, raw → conformalised | 208.1 → **169.5** (lower is better) |
 | Battery: xgb / naive / oracle | 130,909 / 85,104 / 215,828 GBP |
 | Uplift from the forecast | **+53.8%**, capturing 60.7% of oracle |
+
+The regime split answers the obvious challenge — "isn't this just the gas crisis?" — and the
+answer is no: the improvement is *largest* in the most recent, calmest regime.
+
+The interval numbers are the honest ones. A P10-P90 band covering 50% is badly wrong;
+conformal calibration takes it to 76%, still short of nominal because exchangeability fails on
+a non-stationary series. Quote the **Winkler** improvement, not the coverage: any band reaches
+full coverage by widening, and Winkler is the number that punishes that.
 
 ## Refreshing the data
 
@@ -226,19 +310,19 @@ make rebuild START=2022-01-01 END=2025-06-30
 ## Working through the course
 
 ```bash
-open course/00-gb-power-market.md                 # start here — market structure first
-jupyter notebook notebooks/                       # then lessons 01-13
+open course/README.md                             # the syllabus
+open course/00-gb-power-market.md                 # then this — market structure first
+jupyter notebook notebooks/                       # then lessons 01-14
 ```
 
-Order: `course/00` → notebooks `01`–`13` → `course/14`.
-
-The three worth reading even if you skip the rest: **03** (the settlement calendar), **09**
-(walk-forward and leakage), **11** (the strategy design that got thrown away).
+16 lessons. The four worth reading even if you skip the rest: **03** (the settlement
+calendar), **09** (walk-forward and leakage), **11** (the strategy that got thrown away),
+**14** (the interval that did not mean what it said).
 
 ## Everything else
 
 ```bash
-make test               # 100 tests
+make test               # 201 tests
 make lint
 make forecast-ablation  # re-run the walk-forward with weather removed
 make fixtures           # load the committed 6-month sample instead of the full cache
@@ -281,9 +365,15 @@ against a committed 6-month fixture that spans a clock-change day.
 ~/Desktop/First_project/
 ├── PORTFOLIO.md                    # index of both projects (local only)
 ├── RUNBOOK.md                      # this file (local only)
+├── portfolio-site/                 # → nimb-ou.github.io
 ├── loan-underwriting-copilot/      # → GitHub
 └── power-price-alpha/              # → GitHub
 ```
 
-`PORTFOLIO.md` and `RUNBOOK.md` live in the parent folder and are **not** on GitHub — they are
-your notes, not part of either project.
+`PORTFOLIO.md` and `RUNBOOK.md` are your notes, not part of any project.
+
+They are committed to the local `First_project` repo on the
+`docs/draftsmith-substack-extension-spec` branch, but that branch has never been pushed — so
+they are not on GitHub today. Note that `nimb-ou/First_project` **is public**, so pushing that
+branch would publish them. If you want them kept private for good, move them out of that
+working tree or add them to its `.gitignore`.
